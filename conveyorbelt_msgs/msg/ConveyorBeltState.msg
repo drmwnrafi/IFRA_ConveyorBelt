@@ -1,2 +1,2 @@
-float64 power   # POWER of the belt (percentage, in +Y direction of belt frame).
-bool enabled    # {true} if the power of the belt can be modified // {false} if the belt is stopped.
+float64[] powers    # Power of each joint (0-100)
+bool enabled        # Whether the conveyor belt is enabled

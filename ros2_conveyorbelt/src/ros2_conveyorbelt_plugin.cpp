@@ -1,64 +1,18 @@
-/*
-
-# ===================================== COPYRIGHT ===================================== #
-#                                                                                       #
-#  IFRA (Intelligent Flexible Robotics and Assembly) Group, CRANFIELD UNIVERSITY        #
-#  Created on behalf of the IFRA Group at Cranfield University, United Kingdom          #
-#  E-mail: IFRA@cranfield.ac.uk                                                         #
-#                                                                                       #
-#  Licensed under the Apache-2.0 License.                                               #
-#  You may not use this file except in compliance with the License.                     #
-#  You may obtain a copy of the License at: http://www.apache.org/licenses/LICENSE-2.0  #
-#                                                                                       #
-#  Unless required by applicable law or agreed to in writing, software distributed      #
-#  under the License is distributed on an "as-is" basis, without warranties or          #
-#  conditions of any kind, either express or implied. See the License for the specific  #
-#  language governing permissions and limitations under the License.                    #
-#                                                                                       #
-#  IFRA Group - Cranfield University                                                    #
-#  AUTHORS: Mikel Bueno Viso - Mikel.Bueno-Viso@cranfield.ac.uk                         #
-#           Dr. Seemal Asif  - s.asif@cranfield.ac.uk                                   #
-#           Prof. Phil Webb  - p.f.webb@cranfield.ac.uk                                 #
-#                                                                                       #
-#  Date: June, 2023.                                                                    #
-#                                                                                       #
-# ===================================== COPYRIGHT ===================================== #
-
-# ===================================== COPYRIGHT ===================================== #
-#                                                                                       #
-#  Information and guidance on how to implement a ROS2-Gazebo ConveyorBelt plugin has   #
-#  been taken from the usnistgov/ARIAC repo in GitHub. In this repository, the          #
-#  simulation of a ConveyorBelt is already being simulated, and the source code can     #
-#  be found inside /ariac_plugins. This has been useful for the development of the      #
-#  IFRA_ConveyorBelt plugin, which has been desinged in order to comply with the IFRA   # 
-#  ROS2-Gazebo Robot Simulation.                                                        #
-#                                                                                       #
-#  usnistgov/ARIAC repo in GitHub:                                                      #
-#     Repository for ARIAC (Agile Robotics for Industrial Automation Competition),      #
-#     consisting of kit building and assembly in a simulated warehouse.                 #                                             
-#                                                                                       #
-#  Copyright (C) 2023, usnistgov/ARIAC                                                  #                                    
-#                                                                                       #
-# ===================================== COPYRIGHT ===================================== #
-
-# ======= CITE OUR WORK ======= #
-# You can cite our work with the following statement:
-# IFRA-Cranfield (2023) Gazebo-ROS2 Conveyor Belt Plugin. URL: https://github.com/IFRA-Cranfield/IFRA_ConveyorBelt.
-
-*/
-
 #include <gazebo/physics/Model.hh>
 #include <gazebo/physics/World.hh>
 #include <gazebo/physics/Joint.hh>
 #include <gazebo_ros/node.hpp>
 #include <rclcpp/rclcpp.hpp>
 
-#include "ros2_conveyorbelt/ros2_conveyorbelt_plugin.hpp"     // Header file.
-
-#include <conveyorbelt_msgs/srv/conveyor_belt_control.hpp>    // ROS2 Service.
-#include <conveyorbelt_msgs/msg/conveyor_belt_state.hpp>      // ROS2 Message.
+#include "ros2_conveyorbelt/ros2_conveyorbelt_plugin.hpp"
+#include <conveyorbelt_msgs/msg/conveyor_belt_state.hpp>
+#include <conveyorbelt_msgs/msg/conveyor_power.hpp>  
+#include <conveyorbelt_msgs/msg/conveyor_enable.hpp> 
 
 #include <memory>
+#include <vector>
+#include <string>
+#include <sstream>
 
 namespace gazebo_ros
 {
@@ -66,136 +20,180 @@ namespace gazebo_ros
 class ROS2ConveyorBeltPluginPrivate
 {
 public:
-
-  // ROS node for communication, managed by gazebo_ros.
   gazebo_ros::Node::SharedPtr ros_node_;
-
-  // The joint that controls the movement of the belt:
-  gazebo::physics::JointPtr belt_joint_;
-
-  // Additional parametres:
-  double belt_velocity_;
-  double max_velocity_;
-  double power_;
-  double limit_;
+  std::vector<gazebo::physics::JointPtr> belt_joints_;
   
-  // PUBLISH ConveyorBelt status:
-  void PublishStatus();                                                                     // Method to publish status.
-  rclcpp::Publisher<conveyorbelt_msgs::msg::ConveyorBeltState>::SharedPtr status_pub_;      // Publisher.
-  conveyorbelt_msgs::msg::ConveyorBeltState status_msg_;                                    // ConveyorBelt status.
+  
+  std::vector<double> belt_velocities_;
+  std::vector<double> max_velocities_;
+  std::vector<double> powers_;
+  double belt_changer_velocity_;
+  double limit_;
 
-  // SET Conveyor Power:
-  void SetConveyorPower(
-    conveyorbelt_msgs::srv::ConveyorBeltControl::Request::SharedPtr,    
-    conveyorbelt_msgs::srv::ConveyorBeltControl::Response::SharedPtr);                      // Method to execute service.
-  rclcpp::Service<conveyorbelt_msgs::srv::ConveyorBeltControl>::SharedPtr enable_service_;  // ROS2 Service.
+  rclcpp::Publisher<conveyorbelt_msgs::msg::ConveyorBeltState>::SharedPtr status_pub_;
+  conveyorbelt_msgs::msg::ConveyorBeltState status_msg_;
+  
+  rclcpp::Subscription<conveyorbelt_msgs::msg::ConveyorPower>::SharedPtr power_sub_;
+  rclcpp::Subscription<conveyorbelt_msgs::msg::ConveyorEnable>::SharedPtr enable_sub_;
 
-  // WORLD UPDATE event:
-  void OnUpdate();
   rclcpp::Time last_publish_time_;
   int update_ns_;
-  gazebo::event::ConnectionPtr update_connection_;  // Connection to world update event. Callback is called while this is alive.
+  gazebo::event::ConnectionPtr update_connection_;
 
+  void PublishStatus();
+  void OnUpdate();
+  
+  void OnPowerCommand(const conveyorbelt_msgs::msg::ConveyorPower::SharedPtr msg);
+  void OnEnableCommand(const conveyorbelt_msgs::msg::ConveyorEnable::SharedPtr msg);
 };
 
 ROS2ConveyorBeltPlugin::ROS2ConveyorBeltPlugin()
-: impl_(std::make_unique<ROS2ConveyorBeltPluginPrivate>())
-{
-}
+  : impl_(std::make_unique<ROS2ConveyorBeltPluginPrivate>()) {}
 
-ROS2ConveyorBeltPlugin::~ROS2ConveyorBeltPlugin()
-{
-}
+ROS2ConveyorBeltPlugin::~ROS2ConveyorBeltPlugin() = default;
 
 void ROS2ConveyorBeltPlugin::Load(gazebo::physics::ModelPtr _model, sdf::ElementPtr _sdf)
 {
-  
-  // Create ROS2 node:
   impl_->ros_node_ = gazebo_ros::Node::Get(_sdf);
 
-  // OBTAIN -> BELT JOINT:
-  impl_->belt_joint_ = _model->GetJoint("belt_joint");
+  std::string joint_names_str = _sdf->Get<std::string>("joint_names", "").first;
+  std::istringstream joint_names_iss(joint_names_str);
+  std::vector<std::string> joint_names;
+  std::string name;
+  while (joint_names_iss >> name) {
+    joint_names.push_back(name);
+  }
 
-  if (!impl_->belt_joint_) {
-    RCLCPP_ERROR(impl_->ros_node_->get_logger(), "Belt joint not found, unable to start conveyor plugin.");
+  std::string max_velocities_str = _sdf->Get<std::string>("max_velocities", "").first;
+  std::istringstream max_velocities_iss(max_velocities_str);
+  std::vector<double> max_velocities;
+  double velocity;
+  while (max_velocities_iss >> velocity) {
+    max_velocities.push_back(velocity);
+  }
+
+  if (joint_names.empty() || joint_names.size() != max_velocities.size()) {
+    RCLCPP_ERROR(impl_->ros_node_->get_logger(), 
+                "Invalid joint_names or max_velocities configuration");
     return;
   }
 
-  // Set velocity (m/s)
-  impl_->max_velocity_ = _sdf->GetElement("max_velocity")->Get<double>();
+  for (const auto& joint_name : joint_names) {
+    auto joint = _model->GetJoint(joint_name);
+    if (!joint) {
+      RCLCPP_ERROR(impl_->ros_node_->get_logger(), "Joint '%s' not found", joint_name.c_str());
+      return;
+    }
+    impl_->belt_joints_.push_back(joint);
+  }
 
-  // Set limit (m)
-  impl_->limit_ = impl_->belt_joint_->UpperLimit();
+  impl_->max_velocities_ = max_velocities;
+  impl_->belt_velocities_.resize(joint_names.size(), 0.0);
+  impl_->powers_.resize(joint_names.size(), 0.0);
 
-  // Create status publisher
-  impl_->status_pub_ = impl_->ros_node_->create_publisher<conveyorbelt_msgs::msg::ConveyorBeltState>("CONVEYORSTATE", 10);
-  impl_->status_msg_.enabled = false;
-  impl_->status_msg_.power = 0;
+  impl_->belt_changer_velocity_ = _sdf->Get<double>("belt_changer_velocity", 0.0).first;
+  impl_->limit_ = impl_->belt_joints_[0]->UpperLimit();
 
-  // REGISTER ConveyorBelt SERVICE:
-  impl_->enable_service_ =
-    impl_->ros_node_->create_service<conveyorbelt_msgs::srv::ConveyorBeltControl>(
-    "CONVEYORPOWER", std::bind(
-      &ROS2ConveyorBeltPluginPrivate::SetConveyorPower, impl_.get(),
-      std::placeholders::_1, std::placeholders::_2));
+  impl_->status_pub_ = impl_->ros_node_->create_publisher<conveyorbelt_msgs::msg::ConveyorBeltState>(
+    "CONVEYORSTATE", 10);
 
-  double publish_rate = _sdf->GetElement("publish_rate")->Get<double>();
-  impl_->update_ns_ = int((1/publish_rate) * 1e9);
+  impl_->power_sub_ = impl_->ros_node_->create_subscription<conveyorbelt_msgs::msg::ConveyorPower>(
+    "CONVEYORPOWER", 10,
+    [this](const conveyorbelt_msgs::msg::ConveyorPower::SharedPtr msg) {
+      impl_->OnPowerCommand(msg);
+    });
 
+  impl_->enable_sub_ = impl_->ros_node_->create_subscription<conveyorbelt_msgs::msg::ConveyorEnable>(
+    "ENABLEBELT", 10,
+    [this](const conveyorbelt_msgs::msg::ConveyorEnable::SharedPtr msg) {
+      impl_->OnEnableCommand(msg);
+    });
+
+  double publish_rate = _sdf->Get<double>("publish_rate", 10).first;
+  impl_->update_ns_ = static_cast<int>((1.0 / publish_rate) * 1e9);
   impl_->last_publish_time_ = impl_->ros_node_->get_clock()->now();
 
-  // Create a connection so the OnUpdate function is called at every simulation iteration. 
   impl_->update_connection_ = gazebo::event::Events::ConnectWorldUpdateBegin(
-    std::bind(&ROS2ConveyorBeltPluginPrivate::OnUpdate, impl_.get()));
+    [this](gazebo::common::UpdateInfo) { impl_->OnUpdate(); });
 
-  RCLCPP_INFO(impl_->ros_node_->get_logger(), "GAZEBO ConveyorBelt plugin loaded successfully.");
+  RCLCPP_INFO(impl_->ros_node_->get_logger(), "Gazebo ConveyorBelt plugin loaded");
 }
 
 void ROS2ConveyorBeltPluginPrivate::OnUpdate()
 {
-  belt_joint_->SetVelocity(0, belt_velocity_);
-
-  double belt_position = belt_joint_->Position(0);
-
-  if (belt_position >= limit_){
-    belt_joint_->SetPosition(0, 0);
+  for (size_t i = 0; i < belt_joints_.size(); ++i) {
+    belt_joints_[i]->SetVelocity(0, belt_velocities_[i]);
+    if (belt_joints_[i]->Position(0) >= limit_) {
+      belt_joints_[i]->SetPosition(0, -limit_);
+    }
   }
 
-  // Publish status at rate
   rclcpp::Time now = ros_node_->get_clock()->now();
   if (now - last_publish_time_ >= rclcpp::Duration(0, update_ns_)) {
     PublishStatus();
     last_publish_time_ = now;
   }
-    
 }
 
-void ROS2ConveyorBeltPluginPrivate::SetConveyorPower(
-  conveyorbelt_msgs::srv::ConveyorBeltControl::Request::SharedPtr req,
-  conveyorbelt_msgs::srv::ConveyorBeltControl::Response::SharedPtr res)
+void ROS2ConveyorBeltPluginPrivate::OnPowerCommand(
+  const conveyorbelt_msgs::msg::ConveyorPower::SharedPtr msg)
 {
-  res->success = false;
-  if (req->power >= 0 && req->power <= 100) {
-    power_ = req->power;
-    belt_velocity_ = max_velocity_ * (power_ / 100);
-    res->success = true;
+  if (msg->powers.size() != belt_joints_.size()) {
+    RCLCPP_WARN(ros_node_->get_logger(), 
+                "Power array size does not match number of joints");
+    return;
   }
-  else{
-    RCLCPP_WARN(ros_node_->get_logger(), "Conveyor power must be between 0 and 100.");
+
+  for (size_t i = 0; i < belt_joints_.size(); ++i) {
+    double power = msg->powers[i];
+    if (std::abs(power) > 100) {
+      RCLCPP_WARN(ros_node_->get_logger(), 
+                  "Invalid power value for joint %zu. Must be between -100 and 100.", i);
+      continue;
+    }
+
+    if (power < 0) {
+      belt_joints_[i]->SetAxis(0, ignition::math::Vector3d(0, -1, 0));
+      powers_[i] = -power;
+    } else {
+      belt_joints_[i]->SetAxis(0, ignition::math::Vector3d(0, 1, 0));
+      powers_[i] = power;
+    }
+
+    belt_velocities_[i] = max_velocities_[i] * (powers_[i] / 100.0);
   }
 }
 
-void ROS2ConveyorBeltPluginPrivate::PublishStatus(){
-  status_msg_.power = power_;
-
-  if (power_ > 0)
-    status_msg_.enabled = true;
-  else {
-    status_msg_.enabled = false;
+void ROS2ConveyorBeltPluginPrivate::OnEnableCommand(
+  const conveyorbelt_msgs::msg::ConveyorEnable::SharedPtr msg)
+{
+  if (msg->enable.size() != belt_joints_.size()) {
+    RCLCPP_WARN(ros_node_->get_logger(), 
+                "Enable array size does not match number of joints");
+    return;
   }
 
+  for (size_t i = 0; i < belt_joints_.size(); ++i) {
+    if (msg->enable[i]) {
+      belt_joints_[i]->SetVelocity(0, belt_changer_velocity_);
+    }
+  }
+}
+
+void ROS2ConveyorBeltPluginPrivate::PublishStatus()
+{
+  status_msg_.powers.clear(); 
+  bool enabled = false;
+  
+  for (const auto& power : powers_) {
+    status_msg_.powers.push_back(power);
+    if (power > 0) enabled = true;
+  }
+  
+  status_msg_.enabled = enabled;
   status_pub_->publish(status_msg_);
 }
 
-GZ_REGISTER_MODEL_PLUGIN(ROS2ConveyorBeltPlugin)
-}  // namespace gazebo_ros
+GZ_REGISTER_MODEL_PLUGIN(gazebo_ros::ROS2ConveyorBeltPlugin)
+
+} // namespace gazebo_ros
